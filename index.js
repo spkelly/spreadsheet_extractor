@@ -21,6 +21,7 @@ let u_prettyPrintHex = num => '0x' + num.toHex();
   
 
 
+
 function convertSectorCountToOffset(sectorCount, sectorSize){
   let offset = '0x' + (sectorSize + (sectorCount * sectorSize)).toHex().toUpperCase();
   return offset;
@@ -120,41 +121,86 @@ function readFile(){
   if(miniFatStream){
     console.log('Found Mini-Fat stream:  ', JSON.stringify(miniFatStream));
   }
-  let directoryStructure = parseDirectorySectors(directoryStream.stream, data)
-  
+  let directoryStructure = parseDirectorySectors(directoryStream, data);
 
 
-  console.log(directoryStructure);
+  let mapDirectoryData
 
 
 }
 
 function makeDirectoryEntries(data){
-  console.log("the data", data);
   let dirEntrySize = 128;
   let entries = [];
   for(let i = 0; i < data.length; i+= dirEntrySize){
-    let theData = data.slice(i, i+ dirEntrySize)
-
-
+    let theData = data.slice(i, i+ dirEntrySize);
+    if (theData[0] == 0) continue;
     entries.push(theData)
   }
+
   return entries;
 }
 
 function parseDirectorySectors(directoryStream, data){
-  let directorySectors = buildDataFromStream(directoryStream, data);
+  let directorySectors = buildDatafromFatStream(directoryStream, data);
   // let directoryEntries = makeDirectoryEntries(directorySectors);
 
   let test = makeDirectoryEntries(directorySectors);
+  test.shift();
 
+  // let entries = test.filter(removeEmptyDirectores)
   // test.forEach((dirEntry)=>console.log("\n\n" , dirEntry));
+  let directories = test.map(makeDirectories);
 
+  return directories;
 }
 
+function makeDirectories(directory){
+  let dirRef = {}
+  let dv = new DataView(directory.buffer);
+  
+  dirRef.name = decodeDirName(directory.slice(0,64));
+  dirRef.startingSector = dv.getUint32(0x74,true);
+  dirRef.size = dv.getUint16(0x78, true);
+  dirRef.usesMiniFat = dirRef.size < 4096;
+  console.table(dirRef);
+  
+  // console.log(String.fromCharCode.apply(null, new Uint16Array(directory)));
+}
 
-function buildDataFromStream(){
+function decodeDirName(dirName){
+  let dv = new DataView(dirName.buffer);
+  let result = '';
+  let byteOffset = 0;
+  let currentByte = dv.getUint16(byteOffset,true);
+  while (currentByte != 0){
+    result += String.fromCharCode(currentByte);
+    byteOffset += 2;
+    currentByte = dv.getUint16(byteOffset, true);
+  } 
 
+  return result;
+}
+
+function removeEmptyDirectores(entry){
+  return entry[0] != 0;
+}
+
+function buildDatafromFatStream(fatStream, buffer){
+  streamSize = fatStream.stream.length * SECTOR_SIZE;
+  let data = new Uint8Array(streamSize);
+  let fileOffset = u_getByteOffset(fatStream.startingSector + 1) ;
+  let dataOffset = 0;
+  for(let chainEntry = 0; chainEntry < fatStream.stream.length; chainEntry ++){
+    let d = buffer.slice(fileOffset, fileOffset + 512);
+    data.set(d, dataOffset);
+    if(fatStream.stream[chainEntry] == END_SECTOR) break;
+    fileOffset = u_getByteOffset(fatStream.stream[chainEntry] + 1);
+    console.log(fileOffset.toHex())
+    dataOffset += SECTOR_SIZE;
+  }
+
+  return data;
 }
 
 function buildDataFromStream(sectorStream, data){

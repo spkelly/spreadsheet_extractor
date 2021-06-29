@@ -17,3 +17,4 @@
   - [MDN Documentation on MS-CFB](https://docs.microsoft.com/en-us/openspecs/windows_protocols/ms-cfb/53989ce4-7b05-4f8d-829b-d08d6148375b)
   - [Open Office's Documentation of the Excel File Format](https://www.openoffice.org/sc/excelfileformat.pdf)
   - [Open Office's Documentation of the MS CFB File Format](https://www.openoffice.org/sc/compdocfileformat.pdf)
+  
