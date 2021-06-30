@@ -1,11 +1,8 @@
-const { count } = require("console");
-const fs = require("fs");
+const { DIFAT_START, END_SECTOR, FAT_SECTOR, FREE_SECTOR } = require("./shared/constants");
+const { u_getByteOffset, u_leftPad } = require("./shared/untilites");
+const SectorIdChain = require("./SectorIdChain");
 
-const DIFAT_START= 0x50;
-const DIFAT_SECTOR_ENTRIES = 109;
-const END_SECTOR = -2;
-const FAT_SECTOR = -3;
-const FREE_SECTOR = -1;
+const fs = require("fs");
 
 // Sectors are 512 bytes in major version 3
 const SECTOR_SIZE = 512;
@@ -13,18 +10,98 @@ const SECTOR_SIZE = 512;
 Number.prototype.toHex = function(){return this.toString(16)}
 Number.prototype.toBin = function(){return this.toString(2)}
 
-let u_getByteOffset = sectorNumber => sectorNumber * SECTOR_SIZE;
-let u_getSectorEnd = begin => begin + SECTOR_SIZE
-let u_leftPad = (count=80, char=' ') => char.repeat(count);
-let u_prettyPrintHex = num => '0x' + num.toHex();
 
+
+
+function buildSectorIdChains(allocationTable, tableLength){
+  let streams = [];
+  let endOfChain = false;
+  currentRecord = 0;
+  for(let offset = 0; offset < tableLength; offset +=4){    
+    let currentStream = new SectorIdChain();
+
+    while (!endOfChain && offset < tableLength){
+      let currentEntry = allocationTable.getInt16(offset, true);
+      if(currentEntry == FREE_SECTOR || currentEntry == FAT_SECTOR){
+        offset += 4;
+        currentRecord ++;
+        continue;
+      }
+      if(!currentStream.startSector){
+        currentStream.setStartSector(currentRecord);
+        currentStream.setByteOffset( u_getByteOffset(currentRecord + 1));
+      } 
+      currentStream.addItem(currentEntry);
+      if(currentEntry == END_SECTOR) break;
+      offset += 4;
+      currentRecord ++;
+    }
+      if(currentStream.getLength() > 0){
+        streams.push(currentStream);
+        endOfChain = false;
+      }
+    
+    currentRecord ++;
+  }
+
+  return streams;
+
+
+}
   
 
 
+class cfbDirectory{
+  constructor(directryRef, data){
+    this.data;
+  }
+
+
+}
+
+
+
+
+class DirectoryReference{
+  constructor(directoryData){
+    this.name = '';
+    this.size = 0;
+    this.startSector;
+    this.usesMiniFat = false;
+    this._init(directoryData);
+    this.sectorIdChan;
+  }
+
+  _init(data){
+    let dv = new DataView(data.buffer);
+    this.name = this._decodeDirName(data.slice(0,64));
+    this.startingSector = dv.getUint32(0x74,true);
+    this.size = dv.getUint16(0x78, true);
+    this.usesMiniFat = this.size < 4096;
+  }
+
+  _decodeDirName(data){
+    let dv = new DataView(data.buffer);
+    let result = '';
+    let byteOffset = 0;
+    let currentByte = dv.getUint16(byteOffset,true);
+    while (currentByte != 0){
+      result += String.fromCharCode(currentByte);
+      byteOffset += 2;
+      currentByte = dv.getUint16(byteOffset, true);
+    } 
+  
+    return result;
+  };
+
+  toString(){
+    return `Directory Name: ${this.name} StartSector: ${this.startSector} Size: ${this.size} bytes`
+  }
+}
+
 
 function convertSectorCountToOffset(sectorCount, sectorSize){
-  let offset = '0x' + (sectorSize + (sectorCount * sectorSize)).toHex().toUpperCase();
-  return offset;
+  return offset = '0x' + (sectorSize + (sectorCount * sectorSize)).toHex().toUpperCase();
 }
 
 
@@ -81,15 +158,7 @@ function readFile(){
   let FAToffset = (512 + (fileInfo.fatStartingLocation * 512));
   let fat = dataView.slice(FAToffset, FAToffset + FATLength);
 
-  // let fat= new Float32Array(fileInfo.NumberOfFatSectors * 512);
 
-  
-
-
-
-  
-
-  // }
 
   let difatInUse = fileInfo.NumberOfFatSectors > 1;
 
@@ -101,11 +170,11 @@ function readFile(){
     let FAT = buildDataFromStream(FATstream,data);
     // console.log(FAT.buffer);
     let length = FATstream.length * 512;
-    sectorIdStreams = buildSectorIdStreams(new DataView(FAT.buffer), length);
+    sectorIdStreams = buildSectorIdChains(new DataView(FAT.buffer), length);
 
   }
   else{
-      sectorIdStreams = buildSectorIdStreams(new DataView(fat.buffer), FATLength);
+      sectorIdStreams = buildSectorIdChains(new DataView(fat.buffer), FATLength);
   
 
 
@@ -123,79 +192,37 @@ function readFile(){
   }
   let directoryStructure = parseDirectorySectors(directoryStream, data);
 
-
-  let mapDirectoryData
-
+  console.log(directoryStructure);
 
 }
 
-function makeDirectoryEntries(data){
-  let dirEntrySize = 128;
-  let entries = [];
-  for(let i = 0; i < data.length; i+= dirEntrySize){
-    let theData = data.slice(i, i+ dirEntrySize);
+
+function splitData(data, chunkSize, offset=0){
+  let chunks = [];
+  for(let i = offset; i < data.length; i+= chunkSize){
+    let theData = data.slice(i, i+ chunkSize);
     if (theData[0] == 0) continue;
-    entries.push(theData)
+    chunks.push(theData)
   }
 
-  return entries;
+  return chunks;
 }
 
 function parseDirectorySectors(directoryStream, data){
-  let directorySectors = buildDatafromFatStream(directoryStream, data);
-  // let directoryEntries = makeDirectoryEntries(directorySectors);
-
-  let test = makeDirectoryEntries(directorySectors);
-  test.shift();
-
-  // let entries = test.filter(removeEmptyDirectores)
-  // test.forEach((dirEntry)=>console.log("\n\n" , dirEntry));
-  let directories = test.map(makeDirectories);
-
-  return directories;
+  let directoryEntries = splitData(directoryStream.buildStream(data), 128, 128);
+  return  directoryEntries.map(dirData => new DirectoryReference(dirData));
 }
 
-function makeDirectories(directory){
-  let dirRef = {}
-  let dv = new DataView(directory.buffer);
-  
-  dirRef.name = decodeDirName(directory.slice(0,64));
-  dirRef.startingSector = dv.getUint32(0x74,true);
-  dirRef.size = dv.getUint16(0x78, true);
-  dirRef.usesMiniFat = dirRef.size < 4096;
-  console.table(dirRef);
-  
-  // console.log(String.fromCharCode.apply(null, new Uint16Array(directory)));
-}
-
-function decodeDirName(dirName){
-  let dv = new DataView(dirName.buffer);
-  let result = '';
-  let byteOffset = 0;
-  let currentByte = dv.getUint16(byteOffset,true);
-  while (currentByte != 0){
-    result += String.fromCharCode(currentByte);
-    byteOffset += 2;
-    currentByte = dv.getUint16(byteOffset, true);
-  } 
-
-  return result;
-}
-
-function removeEmptyDirectores(entry){
-  return entry[0] != 0;
-}
-
-function buildDatafromFatStream(fatStream, buffer){
-  streamSize = fatStream.stream.length * SECTOR_SIZE;
+function buildDataFromSectorIdStream(fatStream, buffer){
+  streamSize = fatStream.getByteSize();
   let data = new Uint8Array(streamSize);
   let fileOffset = u_getByteOffset(fatStream.startingSector + 1) ;
   let dataOffset = 0;
-  for(let chainEntry = 0; chainEntry < fatStream.stream.length; chainEntry ++){
+  for(let chainEntry = 0; chainEntry < fatStream.getLength(); chainEntry ++){
     let d = buffer.slice(fileOffset, fileOffset + 512);
     data.set(d, dataOffset);
-    if(fatStream.stream[chainEntry] == END_SECTOR) break;
-    fileOffset = u_getByteOffset(fatStream.stream[chainEntry] + 1);
+    if(fatStream.chain[chainEntry] == END_SECTOR) break;
+    fileOffset = u_getByteOffset(fatStream.chain[chainEntry] + 1);
     console.log(fileOffset.toHex())
     dataOffset += SECTOR_SIZE;
   }
@@ -244,65 +271,10 @@ function makeFATSectorChain(startSector,data){
 
 
 function findStream(streams, startingLocation){
-  let streamLocation = streams.find(element=>element.startingSector == startingLocation)
+  let streamLocation = streams.find(element=>element.startSector == startingLocation)
   if(streamLocation == -1) throw new Error('Could not find directory stream');
   return streamLocation;  
 }
-
-function findMiniStream(){
-
-}
-
-
-function buildSectorIdStreams(FAT, FATLength){
-  let streams = [];
-  let endOfStream = false;
-  let endOfFat = false;
-  currentRecord = 0;
-  for(let offset = 0; offset < FATLength; offset +=4){
-    
-    let currentStream = {stream:[]};
-    while (!endOfStream && offset < FATLength){
-      let currentEntry = FAT.getInt16(offset, true);
-      if(currentEntry == FREE_SECTOR || currentEntry == FAT_SECTOR){
-        offset += 4;
-        currentRecord ++;
-        continue;
-      }
-      if(!currentStream.startingSector){
-        currentStream.startingSector = currentRecord;
-        currentStream.byteOffset = u_getByteOffset(currentRecord + 1);
-      } 
-      currentStream.stream.push(currentEntry);
-      if(currentEntry == END_SECTOR) break;
-      offset += 4;
-      currentRecord ++;
-    }
-      if(currentStream.stream.length > 0){
-        currentStream.byteLength = currentStream.stream.length * 512;
-        streams.push(currentStream);
-        endOfStream = false;
-      }
-    
-    currentRecord ++;
-  }
-
-  return streams;
-
-
-}
-
-
-function getFileSectors(file, sectorSize){
-  let sectorCount = file.length / sectorSize;
-  let fileSectors = [];
-  for(let i = 0; i < file.length; i+=sectorSize){
-    fileSectors.push(new DataView(file.buffer.slice(i,i+sectorSize)));
-  }
-  return fileSectors;
-}
-
-
 
 function parseHeaderInfo(header){
 
